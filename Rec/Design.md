@@ -136,3 +136,134 @@ Time from app open → YouTube results for today's first exercise ≤ 10s.
 Paste-to-parsed WODs success ≥ 90% first attempt.
 Zero taps to reach today's WOD from Home.
 
+
+Update to align with Update 2 on Dev.md:
+Local iOS app. Paste WhatsApp workout → regex parser extracts what it can → preview screen for quick edits → daily WOD cards. Each exercise has a YouTube logo button that opens in-app WKWebView search. No backend, no API keys, no LLM, no third-party SDKs.
+
+Assumptions
+
+Single-user, on-device only.
+iOS 16+ (SwiftUI, DatePicker, WKWebView, SwiftData).
+Coach message structure varies — parser handles the common ~65%, preview handles the rest.
+YouTube results via public web search in WKWebView (no API key).
+Dates in device local timezone.
+
+Problem
+Coach sends multi-week workout blocks via WhatsApp. Looking up each unfamiliar exercise on YouTube kills momentum. Need a local app that renders the plan and gives one-tap access to a tutorial.
+Target User
+Single user (you) — recreational athlete on coached programming.
+Job To Be Done
+
+"Open my workout, see today's exercises, tap a YouTube icon to find a tutorial, without leaving the app."
+
+Information Architecture
+
+Tabs: Home · WOD (Update)
+Home = daily WOD cards sorted by date relevance
+WOD tab = paste + date range + submit → Preview → save
+Card tap → WOD Detail (segments → exercises → YT button)
+YT tap → full-screen WKWebView interstitial
+
+Screen Specs
+1. Home Screen
+Header: "WODs"
+Card:
+| Element       | Detail                                            |
+| ------------- | ------------------------------------------------- |
+| Date          | `MM/DD/YYYY` top-left                             |
+| Segments      | Comma-separated (e.g., "A: WOD, B: Lactate Pump") |
+| # of workouts | Total exercise count, top-right                   |
+| Complete CTA  | Checkmark right-side; confirm → remove from Home  |
+
+
+Sort order: Today (highlighted) → Upcoming asc → Past-this-week desc (red date + "Past" label) → archived after week ends.
+Edge cases:
+
+Rest day → placeholder "Rest" card.
+Plan ended → banner "Plan ended. Add new workout."
+No plan → empty state → CTA to WOD tab.
+
+2. WOD Detail Screen
+Header: Back · MM/DD/YYYY
+Grouped by Segment:
+A: Workout of the day
+  ┌──────────────────────────────────────┐
+  │ Weighted GHD back extension          │
+  │ 3 sets × 15 reps          [ ▶ YT ]   │
+  │ Notes: Glute bias                    │
+  └──────────────────────────────────────┘
+
+Row variants (parser output determines layout):
+| Type                 | Display                                              |
+| -------------------- | ---------------------------------------------------- |
+| Standard             | `N sets × N reps`                                    |
+| Each-side            | `N sets × N reps each side`                          |
+| Timed hold           | `N sets × N sec hold`                                |
+| Interval             | `N rounds · N sec on / N sec off`                    |
+| Superset             | Two rows joined by left bracket `[` + "SUPERSET" tag |
+| Block (EMOTM/TABATA) | Collapsible card listing child movements             |
+| Build to max         | "Build to N-rep max" pill                            |
+| Name only            | Name + "No sets/reps" caption                        |
+
+
+YouTube logo button on every row (44×44 min).
+Tap → full-screen sheet with WKWebView loading youtube.com/results?search_query=<name>+tutorial.
+
+3. Update Screen
+
+Start / End date pills → native DatePicker (graphical).
+Multi-line paste text area.
+Submit disabled until both dates + text present.
+
+4. Preview Screen (mandatory, promoted from optional)
+Header: "Review your workout" · Save (top-right)
+Layout:
+
+Grouped: Day → Segment → Exercise rows.
+Each row shows parsed fields + confidence badge:
+
+🟢 High — full match
+🟡 Medium — partial (missing sets or reps)
+🔴 Low / Unparsed — raw line preserved, inline text field to edit
+
+
+
+Actions per row:
+
+Tap → inline edit (name, sets, reps, duration, each-side toggle, notes).
+Swipe left → delete.
+Long-press → reassign to different segment/day.
+
+"Needs Review" bucket: unparsed lines shown at bottom of each day. User can:
+
+Convert to exercise (fill fields).
+Merge with previous row (compound set).
+Delete.
+Leave as-is (saved as name-only with rawLine preserved).
+
+Save button: always enabled. Unresolved rows saved as-is; user owns the tradeoff.
+Edit later: every exercise remains editable from WOD Detail (pencil icon).
+Design System
+
+Minimal, high-contrast, B&W + 1 accent.
+SF Pro; Title 20 / Body 16 / Caption 13.
+16pt card radius, 12pt button radius.
+Motion: 0.98 card press scale, 250ms sheet slide.
+
+Accessibility
+
+Dynamic Type.
+VoiceOver: card announces "Date, N workouts, segments X, Y".
+YT button: "Search YouTube for {name}".
+Red past-date always paired with "Past" text label.
+44×44 min tap targets.
+
+Success Metrics
+
+Paste → preview → save in ≤ 60s for a full week.
+≥65% of exercise lines parse to 🟢 High confidence.
+0 taps between Home and today's first YT tutorial (aside from card + row + YT logo).
+
+
+
+
