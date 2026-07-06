@@ -1,0 +1,138 @@
+Local iOS app that ingests a pasted WhatsApp workout plan, parses it into daily WOD cards, and opens YouTube search results in an in-app webview per exercise. Zero-friction: paste → parse → workout. No login, no backend, no AI in v1 (regex parser + WKWebView).
+Assumptions
+
+Single-user, on-device only. No sync, no auth.
+iOS 16+ (SwiftUI, native date picker, WKWebView).
+Coach messages follow ~90% consistent structure (Week / Day / Segment / Exercise). Remaining 10% handled via manual edit.
+YouTube results accessed via public web search in WKWebView — no API key, no quota.
+"Segments" = grouping like Conditioning, Strength, Mobility, etc.
+Exercise format: Name — Sets x Reps (e.g., Goblet Squat — 3x10).
+Dates in device local timezone.
+
+Problem
+Athlete receives long WhatsApp workout messages from coach. Every unfamiliar exercise requires leaving the chat, searching YouTube, filtering results — high friction that kills workout motivation.
+Target User
+Single user (you) — recreational athlete receiving coached programming via WhatsApp.
+Job To Be Done
+
+"When I open my workout, show me today's exercises and let me pull up a YouTube tutorial instantly, without leaving the app."
+
+Information Architecture
+
+Tabs (bottom nav): Home · WOD (Update)
+Home = list of WOD cards sorted by relevance.
+WOD tab = Update screen (paste + date range + submit).
+Card tap → WOD Detail (segments → exercises → YouTube logo button).
+YT logo tap → full-screen WKWebView interstitial with YouTube search results.
+
+Screen Specs
+1. Home Screen
+Header: "WODs" (left-aligned, bold).
+Card list (vertical scroll):
+| Element                      | Detail                                                               |
+| ---------------------------- | -------------------------------------------------------------------- |
+| Date                         | `MM/DD/YYYY` — top-left of card                                      |
+| Segments                     | Comma or line-separated list (e.g., "Conditioning, Strength")        |
+| # of workouts                | Total exercise count across all segments for that day, right-aligned |
+| Complete CTA                 | Checkmark button, right side; tap → confirm → remove card            |
+| State: Today                 | Highlighted (accent border), sorted to top                           |
+| State: Upcoming              | Default styling, sorted by ascending date below Today                |
+| State: Past (this week)      | Moved to bottom, date shown in **red**, still tappable               |
+| State: Past (previous weeks) | Auto-archived after week ends until new update is submitted          |
+
+Sort order (top → bottom):
+
+Today
+Upcoming (asc)
+Past this week (desc, red date)
+Empty state if no active plan → CTA "Add your first workout" → WOD tab.
+
+Edge cases:
+
+Multiple WODs on same date → stack chronologically by segment order in source text.
+No workout for today → show "Rest day" placeholder card if plan covers today but has no exercises.
+Date range ended → prompt banner "Plan ended. Add new workout."
+
+2. WOD Detail Screen
+Header: Back · MM/DD/YYYY
+Body (grouped by Segment):
+Segment Name: Conditioning
+  ┌──────────────────────────────────────┐
+  │ Workout Name                         │
+  │ Sets   Reps               [ ▶ YT ]   │
+  │  X      Y                            │
+  └──────────────────────────────────────┘
+
+YouTube logo button (right side of exercise row):
+
+Official YouTube "play" mark, min 44×44 tap target.
+VoiceOver label: "Search YouTube for {exercise name}".
+States: default, pressed, disabled (offline).
+
+
+
+On tap → YouTube Interstitial (full-screen sheet):
+
+Top bar: Close (X) left · Exercise name center · Open in YouTube app right (optional external handoff).
+Body: WKWebView loaded with YouTube search results URL for the exercise name.
+Behavior: User scrolls, taps a result, video plays inside the same webview. Back gesture returns to results list within the interstitial.
+Dismiss: Tap X or swipe down → returns to WOD Detail.
+
+Interstitial states:
+| State           | UI                                      |
+| --------------- | --------------------------------------- |
+| Loading         | Skeleton + spinner over webview         |
+| Offline         | "No internet. Try again." + Retry       |
+| Load error      | "Couldn't load YouTube. Retry / Close." |
+| Slow load (>5s) | Keep spinner; do not block dismiss      |
+
+Edge cases:
+
+Ambiguous exercise name (e.g., "AMRAP 12") → YT button still works; user can refine search inside webview.
+Very long name → truncate in query to 100 chars.
+
+3. Update Screen (WOD tab)
+Header: "Select dates and paste workout to continue."
+Fields:
+
+Dates: Two pill inputs Start — End. Tap opens native UIDatePicker (graphical). End ≥ Start.
+Paste text area: Multi-line, expandable, placeholder "Paste text here". Supports clipboard paste.
+Submit button: Bottom center. Disabled until Start, End, and text field all filled. Filled black when active.
+
+On Submit:
+
+Parse text → preview screen shows detected Weeks/Days/Segments/Exercises.
+User confirms → data saved locally, navigate to Home.
+Parse failure → highlight unparsed lines, allow inline edit.
+
+Edge cases:
+
+Overlapping plan dates → warn "This overwrites Days X–Y from current plan. Continue?"
+Text too short (<20 chars) → disable submit + hint.
+Paste contains emojis / non-ASCII → strip and continue.
+Date range shorter than plan content → warn and truncate.
+Date range longer than plan content → allow, fill missing days as "Rest".
+
+Design System
+
+Style: Minimal, high-contrast, black/white base + 1 accent (suggest energetic red-orange).
+Typography: SF Pro; Title 20, Body 16, Caption 13.
+Radius: 16pt cards, 12pt buttons.
+States: Default, Pressed, Disabled, Loading, Error, Empty defined for every interactive element.
+Motion: Card tap scale 0.98; sheet slide-up 250ms.
+
+Accessibility
+
+Dynamic Type support (including inside webview via native rendering).
+VoiceOver: card announces "Date, N workouts, segments X and Y".
+YT button announces exercise name + action.
+Min tap target 44x44.
+Red past-date accompanied by "Past" label (not color-only).
+Close button in interstitial always reachable.
+
+Success Metrics (Design)
+
+Time from app open → YouTube results for today's first exercise ≤ 10s.
+Paste-to-parsed WODs success ≥ 90% first attempt.
+Zero taps to reach today's WOD from Home.
+
