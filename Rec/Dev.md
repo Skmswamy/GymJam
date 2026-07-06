@@ -1,4 +1,4 @@
-SwiftUI iOS app. Local persistence via SwiftData. Regex-based parser for coach's message format. YouTube search opened in-app via WKWebView interstitial. No backend, no API keys, no third-party SDKs.
+SwiftUI iOS app targeting iOS 17+. Local persistence via SwiftData. Regex-based parser for coach's message format. YouTube search opened in-app via WKWebView interstitial. No backend, no API keys, no third-party SDKs.
 Architecture
 [SwiftUI Views]
      │
@@ -236,7 +236,10 @@ Segment {
 
 
 Update 2:
-SwiftUI iOS 16+. SwiftData persistence. Multi-priority regex parser with confidence scoring. WKWebView interstitial for YouTube. No backend, no API keys, no LLM, no third-party SDKs.
+SwiftUI iOS 17+. SwiftData persistence. Multi-priority regex parser with confidence scoring. WKWebView interstitial for YouTube. No backend, no API keys, no LLM, no third-party SDKs.
+
+Update 3:
+Resolved platform discrepancy: SwiftData is retained, so the implementation target is iOS 17+ rather than iOS 16+. This matches Apple's SwiftData availability and keeps the app local-only without introducing a custom persistence layer.
 
 Architecture
 [SwiftUI Views]
@@ -472,7 +475,6 @@ Risks & Mitigations
 | DST/timezone bugs                    | Calendar day arithmetic                                       |
 | Deep-link hijack                     | Domain allowlist                                              |
 | User frustration from manual cleanup | Make preview edit fast (inline, swipe, long-press)            |
-
 
 
 

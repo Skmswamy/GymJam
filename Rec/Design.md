@@ -2,7 +2,7 @@ Local iOS app that ingests a pasted WhatsApp workout plan, parses it into daily 
 Assumptions
 
 Single-user, on-device only. No sync, no auth.
-iOS 16+ (SwiftUI, native date picker, WKWebView).
+iOS 17+ (SwiftUI, native date picker, WKWebView, SwiftData).
 Coach messages follow ~90% consistent structure (Week / Day / Segment / Exercise). Remaining 10% handled via manual edit.
 YouTube results accessed via public web search in WKWebView — no API key, no quota.
 "Segments" = grouping like Conditioning, Strength, Mobility, etc.
@@ -143,7 +143,7 @@ Local iOS app. Paste WhatsApp workout → regex parser extracts what it can → 
 Assumptions
 
 Single-user, on-device only.
-iOS 16+ (SwiftUI, DatePicker, WKWebView, SwiftData).
+iOS 17+ (SwiftUI, DatePicker, WKWebView, SwiftData).
 Coach message structure varies — parser handles the common ~65%, preview handles the rest.
 YouTube results via public web search in WKWebView (no API key).
 Dates in device local timezone.
@@ -263,7 +263,6 @@ Success Metrics
 Paste → preview → save in ≤ 60s for a full week.
 ≥65% of exercise lines parse to 🟢 High confidence.
 0 taps between Home and today's first YT tutorial (aside from card + row + YT logo).
-
 
 
 
