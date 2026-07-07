@@ -1,481 +1,1311 @@
-SwiftUI iOS app targeting iOS 17+. Local persistence via SwiftData. Regex-based parser for coach's message format. YouTube search opened in-app via WKWebView interstitial. No backend, no API keys, no third-party SDKs.
-Architecture
-[SwiftUI Views]
-     │
-     ├── ViewModels (MVVM)
-     │
-     ├── ParserService         ── regex + heuristics
-     ├── PlanStore             ── SwiftData (Plan, WOD, Segment, Exercise)
-     └── YouTubeSearchWebView  ── WKWebView (search + playback in interstitial)
+# Product Requirements Document (PRD)
+# Move – Workout Import & Guided Workout Experience (MVP)
 
+**Version:** 1.0  
+**Status:** Draft  
+**Author:** Product Management  
+**Platform:** iOS (SwiftUI)  
+**Storage:** Local Device Only  
+**Target Audience:** Junior iOS Developer
 
-Parser Requirements
-Input: Raw pasted text (multiline).
-Output: [WOD] mapped to date range.
-Detection rules (regex + heuristics):
-| Token    | Pattern (example)                                                                                                           |
-| -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Week     | `Week\s*#?\s*(\d+)`                                                                                                         |
-| Day      | `(Mon\|Tue\|Wed\|Thu\|Fri\|Sat\|Sun)[a-z]*`                                                                                 |
-| Segment  | Line matches known list: `Conditioning\|Strength\|Mobility\|Warm-?up\|Cool-?down\|WOD\|Skill\|Accessory` (case-insensitive) |
-| Exercise | Line with pattern `<name>\s*[—\-–:]\s*(\d+)\s*[xX×]\s*(\d+\+?\|AMRAP\|max)` OR bullet `- <name> 3x10`                       |
+---
 
+# 1. Overview
 
-Mapping logic:
+## Product Vision
 
-Extract startDate and endDate from Update screen.
-Group lines by Week → Day.
-Assign each Day to a calendar date: startDate + offset(dayOfWeek).
-If multiple weeks, increment week offset by 7 days.
-Days without exercises → mark as Rest.
-
-Fallback:
-
-Any unparsed block → surface in preview UI with editable text field.
-Save rawText always so user can re-parse.
-
-YouTube Search Interstitial
-Component: YouTubeSearchWebView (SwiftUI wrapper around WKWebView).
-URL construction: https://www.youtube.com/results?search_query=<url-encoded exercise name>+tutorial
-
-URL-encode via addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed).
-Append +tutorial to bias toward instructional content.
-No API keys, no tokens.
-
-WKWebView configuration:
-| Setting                                    | Value          | Reason                                 |
-| ------------------------------------------ | -------------- | -------------------------------------- |
-| `allowsInlineMediaPlayback`                | `true`         | Play video without leaving webview     |
-| `mediaTypesRequiringUserActionForPlayback` | `[]`           | Standard tap-to-play                   |
-| `websiteDataStore`                         | `.default()`   | Persist login/cookies if user signs in |
-| `navigationDelegate`                       | custom         | Handle errors, external links          |
-| User agent                                 | default mobile | Serve mobile YouTube UI                |
-
-
-Presentation:
-
-Present as full-screen sheet (.fullScreenCover in SwiftUI).
-Dismiss via close button or interactive swipe.
-Release webview on dismiss to avoid memory leaks.
-
-Navigation delegate rules:
-
-Allow: youtube.com, youtu.be, google.com (auth), googleusercontent.com, ytimg.com.
-Block all other domains.
-"Open in YouTube app" → UIApplication.shared.open(URL) with youtube:// scheme; fallback to https.
-
-Functional Requirements
-FR1 — Paste & Parse
-
-Text area accepts up to 20,000 chars.
-Parse runs on Submit; loading state max 2s.
-Preview screen lets user edit before saving.
-
-FR2 — Date Range
-
-Native DatePicker (graphical style).
-Validation: endDate >= startDate; both required.
-Timezone: device local.
-
-FR3 — Home Sorting
-sorted = [today] + [upcoming asc] + [past-this-week desc (red)]
-Past weeks archived until new Plan submitted.
-
-FR4 — Card Completion
-
-"Complete" CTA on card → confirm dialog → isCompleted = true → remove from Home list (retain in DB).
-
-FR5 — WOD Detail
-
-Grouped by Segment (source order).
-Each exercise row renders a YTLogoButton.
-Tap → present YouTubeSearchWebView(query: exercise.name).
-No pre-fetch, no caching — always live search.
-
-FR6 — Overwrite Handling
-
-New Plan overlapping existing dates → warning modal → user chooses Overwrite / Merge / Cancel.
-
-FR7 — External Handoff (optional)
-
-"Open in YouTube app" in interstitial top bar deep-links to native app if installed; else reload in webview.
-
-Non-Functional Requirements
-| Category          | Target                                                     |
-| ----------------- | ---------------------------------------------------------- |
-| Cold start        | ≤ 1.5s                                                     |
-| Parse time        | ≤ 2s for 5,000-char input                                  |
-| Webview cold load | ≤ 2.5s p90 on 4G                                           |
-| Offline           | Home + WOD detail work offline; YT button disabled         |
-| Storage           | <50MB                                                      |
-| Memory            | Release webview on dismiss; nil out delegate               |
-| Crash-free        | ≥ 99.5%                                                    |
-| Privacy           | No data leaves device except webview's own YouTube traffic |
-
-
-
-Edge Cases (must handle)
-| Case                                             | Behavior                                                |
-| ------------------------------------------------ | ------------------------------------------------------- |
-| Empty paste                                      | Submit disabled                                         |
-| Start > End                                      | Inline error, block submit                              |
-| Same-day plan                                    | Allowed; single WOD                                     |
-| Plan spans DST change                            | Use `Calendar.current` day math, not seconds            |
-| Duplicate exercise names                         | Allowed; each row independent                           |
-| Non-English exercise name                        | URL-encoded; YouTube handles rendering                  |
-| Coach message has emojis / stickers              | Strip in preprocessor                                   |
-| Coach uses "reps: 10, sets: 3" instead of "3x10" | Parser handles both orders                              |
-| Missing day (coach skipped Wed)                  | Mark as Rest                                            |
-| Week 2 starts mid-range                          | Compute from Week 1 anchor date                         |
-| User completes all WODs before endDate           | Show "Plan complete" state                              |
-| Offline                                          | YT button disabled with strikethrough + toast on tap    |
-| Webview fails to load                            | Retry + Close in interstitial                           |
-| Airplane mode mid-view                           | Show offline state, allow dismiss                       |
-| Very long exercise name                          | Truncate query to 100 chars                             |
-| Special chars (`½`, `°`, `+`, `&`)               | Fully URL-encode                                        |
-| Ambiguous name (e.g., "AMRAP 12")                | Allow search; user refines in webview                   |
-| User signed into YouTube in webview              | Persist via `.default()` data store                     |
-| EU consent / cookie banner                       | Rendered by YouTube; user handles once, cookies persist |
-| User backgrounds app mid-video                   | Webview pauses per YouTube default; resumes on return   |
-| Multiple rapid taps on YT button                 | Debounce 500ms to prevent duplicate presentations       |
-| Deep link to external app inside webview         | Blocked unless whitelisted                              |
-| Timezone changes mid-plan                        | Recompute dates on app foreground                       |
-
-
-MVP Scope
-In: Paste + parse, date range, Home sorting, complete CTA, overwrite handling, WOD detail with YT logo button, in-app YouTube webview interstitial.
-Out: Multi-user, cloud sync, notifications, workout timers, exercise history, coach chat, AI parsing (v1.1 candidate), video pre-fetch/caching.
-
-| Risk                                   | Mitigation                                       |
-| -------------------------------------- | ------------------------------------------------ |
-| Parser fails on 10% variant messages   | Preview + inline edit before save                |
-| YouTube changes mobile web layout      | Webview auto-adapts; no parsing dependency       |
-| Autoplay blocked                       | Standard tap-to-play; document behavior          |
-| WKWebView memory leaks                 | Deallocate on dismiss; nil out delegate          |
-| EU consent flow blocks results         | User completes once; cookies persist             |
-| Deep link hijack attempts              | Strict domain allowlist in navigation delegate   |
-| Wrong search result for ambiguous name | User refines inside webview search bar           |
-| DST / timezone bugs                    | Use `Calendar` day arithmetic, never raw seconds |
-| Coach changes message format           | v1.1: add AI fallback parser (GPT-4o mini)       |
-
-
-
-
-Update 1:
-Updated Parser Requirements (replaces prior spec)
-Rule 1 — Segment Detection (broader)
-^[A-C]\s*[-–]\s*(.+)$    → Segment header (name = capture group)
-
-Not a fixed allowlist. Any A-, B-, C- line is a segment. Name is free text.
-Rule 2 — Exercise Line (multi-pattern)
-Try in order, first match wins:
-| Priority | Pattern                                                                               | Captures                    |
-| -------- | ------------------------------------------------------------------------------------- | --------------------------- |
-| P1       | `(.+?)\s*(\d+)\s*(?:reps?)?\s*(es)?\s*\*\s*(\d+)\s*(?:sets?)?`                        | name, reps, each-side, sets |
-| P2       | `(.+?)\s*\*\s*(\d+)\s*sets?` (reps missing)                                           | name, sets                  |
-| P3       | `(\d+)\s*(?:secs?)\s*(?:on)?\s*(\d+)?\s*(?:secs?)?\s*(?:off)?\s*\*\s*(\d+)\s*rounds?` | interval work               |
-| P4       | `(\d+)\s*(?:secs?)\s+(.+)`                                                            | timed hold                  |
-| P5       | `Build to\s+(.+?)\s+(\d+)\s*reps?\s*max`                                              | build-to-max                |
-| P6       | Line starts with number/dash and has letters                                          | name-only exercise          |
-
-
-Rule 3 — Compound Sets
-If line contains + between two exercise-like fragments, split into two Exercise records with shared supersetId.
-Rule 4 — Block Formats (EMOTM / TABATA / AMRAP)
-Detect header keywords: EMOTM, TABATA, AMRAP, EMOM, Every \d+ min.
-Treat entire block as a single BlockExercise with:
-
-type: emotm / tabata / amrap
-duration: parsed from header
-movements: list of child lines (Min-1 X, Min-2 Y, or just numbered items)
-
-Rule 5 — Day Detection
-^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s*$
-Case-insensitive. Trailing spaces tolerated.
-
-Rule 6 — Week Detection
-^Week[-\s]*(\d+)
-
-Rule 7 — Ignore Numbering
-Never trust 1-, 2- prefixes. Use line order within a segment as source of truth (numbering skips and duplicates in real data).
-
-Updated Data Model:
-Exercise {
-  id: UUID
-  name: String
-  sets: Int?
-  reps: String?           // "10", "10-12", "AMRAP", "max"
-  eachSide: Bool          // "es" flag
-  durationSec: Int?       // for timed holds
-  intervalWork: Int?      // secs on
-  intervalRest: Int?      // secs off
-  rounds: Int?            // total rounds
-  supersetId: UUID?       // links compound "+" pairs
-  buildToMax: Bool
-  notes: String?          // parenthetical text
-  rawLine: String
-  parsedConfidence: Float // 0.0–1.0
-}
-
-BlockExercise {          // NEW: EMOTM / TABATA / AMRAP wrappers
-  id: UUID
-  type: BlockType         // .emotm, .tabata, .amrap
-  totalDurationMin: Int?
-  movements: [Exercise]
-}
-
-Segment {
-  id: UUID
-  prefix: String?         // "A", "B", "C"
-  name: String            // "Workout of the day", "Lactate Pump", free text
-  order: Int
-  exercises: [Exercise]
-  blocks: [BlockExercise]
-}
-
-
-
-Update 2:
-SwiftUI iOS 17+. SwiftData persistence. Multi-priority regex parser with confidence scoring. WKWebView interstitial for YouTube. No backend, no API keys, no LLM, no third-party SDKs.
-
-Update 3:
-Resolved platform discrepancy: SwiftData is retained, so the implementation target is iOS 17+ rather than iOS 16+. This matches Apple's SwiftData availability and keeps the app local-only without introducing a custom persistence layer.
-
-Architecture
-[SwiftUI Views]
-     │
-     ├── ViewModels (MVVM)
-     │
-     ├── ParserService        ── multi-pattern regex + block detector
-     ├── PreviewViewModel     ── confidence scoring + edit ops
-     ├── PlanStore            ── SwiftData
-     └── YouTubeSearchWebView ── WKWebView (search + playback in interstitial)
-
-
-Tech Stack
-| Layer       | Choice                             |
-| ----------- | ---------------------------------- |
-| UI          | SwiftUI, iOS 16+                   |
-| State       | MVVM + `@Observable`               |
-| Persistence | SwiftData                          |
-| Networking  | None (webview only)                |
-| Video       | WKWebView → `youtube.com/results`  |
-| Date UI     | Native `DatePicker` (`.graphical`) |
-| Analytics   | None (local console log for debug) |
-
-
-Data Model
-Plan {
-  id: UUID
-  startDate: Date
-  endDate: Date
-  rawText: String
-  createdAt: Date
-}
-
-WOD {
-  id: UUID
-  planId: UUID
-  date: Date
-  weekNumber: Int?
-  dayOfWeek: String?
-  isCompleted: Bool
-  segments: [Segment]
-}
-
-Segment {
-  id: UUID
-  prefix: String?         // "A", "B", "C"
-  name: String            // "Workout of the day", free text
-  order: Int
-  exercises: [Exercise]
-  blocks: [BlockExercise]
-}
-
-Exercise {
-  id: UUID
-  name: String
-  sets: Int?
-  reps: String?           // "10", "10-12", "AMRAP", "max"
-  eachSide: Bool
-  durationSec: Int?
-  intervalWork: Int?
-  intervalRest: Int?
-  rounds: Int?
-  supersetId: UUID?
-  buildToMax: Bool
-  notes: String?
-  rawLine: String
-  parsedConfidence: Float // 0.0–1.0
-  userEdited: Bool
-}
-
-BlockExercise {
-  id: UUID
-  type: BlockType         // .emotm, .tabata, .amrap, .rounds
-  totalDurationMin: Int?
-  workSec: Int?
-  restSec: Int?
-  rounds: Int?
-  movements: [Exercise]
-}
-
-Parser Requirements
-Preprocessing
-
-Normalize whitespace, strip emojis/stickers.
-Fix common typos in known tokens (Barbel → Barbell, Palloff → keep verbatim but store normalized name for search).
-Collapse multiple spaces around *, x, ×.
-
-Detection Rules
-| Rule                | Pattern                                                                     | Priority        |
-| ------------------- | --------------------------------------------------------------------------- | --------------- |
-| Week                | `^Week[-\s]*(\d+)`                                                          | 1               |
-| Day                 | `^(Mon\|Tue\|Wed\|Thu\|Fri\|Sat\|Sun)[a-z]*\s*$` (case-insensitive)         | 1               |
-| Segment             | `^[A-C]\s*[-–]\s*(.+)$` (free-text name)                                    | 2               |
-| Block header        | `EMOTM\|EMOM\|TABATA\|AMRAP\|Every\s+\d+\s+min`                             | 3 (block start) |
-| Interval            | `(\d+)\s*secs?\s*on\s*(\d+)\s*secs?\s*off\s*[\*×x]\s*(\d+)\s*rounds?`       | 4               |
-| Timed hold          | `(\d+)\s*secs?\s+(.+)`                                                      | 5               |
-| Build to max        | `Build\s+to\s+.*?(\d+)\s*reps?\s*max`                                       | 6               |
-| Standard            | `(.+?)\s+(\d+)\s*(reps?)?\s*(es)?\s*[\*×x]\s*(\d+)\s*(sets?)?`              | 7               |
-| Reversed            | `(.+?)\s+(\d+)\s*(?:sets?)\s*[\*×x]\s*(\d+)\s*(?:reps?)?`                   | 7               |
-| Compact             | `(.+?)\s+(\d+)(es)?\s*\*\s*(\d+)sets?`                                      | 7               |
-| Compound (superset) | Line contains `+` between two exercise patterns → split, share `supersetId` | 8               |
-| Name-only           | Line has letters, no numeric structure → save as name only, confidence 0.4  | 9               |
-
-
-Confidence Scoring
-1.0  = all fields captured (name, sets, reps)
-0.8  = name + sets OR name + reps
-0.6  = timed/interval/block match
-0.4  = name only
-0.2  = unmatched, saved as rawLine
-
-Line-Order Rule
-Ignore numeric prefixes (1-, 2-, 3-). Line order within a segment is the source of truth. Real data skips and duplicates numbers.
-Block Parsing
-When a block header is detected:
-
-Consume header line → create BlockExercise with type + duration.
-Consume child lines until next segment/day/blank → parse each as movement (may be Min-N X reps or plain numbered).
-Attach movements to BlockExercise.movements.
-
-Day → Date Mapping
-
-Anchor Week 1 first day = startDate.
-For each subsequent Day, compute date = startDate + (weekOffset × 7) + dayOfWeekOffset.
-Days without exercises = Rest.
-If mapped date > endDate → warn in preview, do not save.
-
-Functional Requirements
-FR1 — Paste & Parse
-
-Text area max 20,000 chars.
-Parse on Submit; loading state max 2s.
-Always route to Preview screen (no direct save).
-
-FR2 — Date Range
-
-Native DatePicker graphical.
-Validation: endDate >= startDate.
-Device local timezone.
-
-FR3 — Preview & Edit
-
-Grouped list: Day → Segment → Exercise.
-Row edit sheet: name, sets, reps, duration, each-side, notes.
-Swipe delete, long-press reassign.
-"Needs Review" bucket per day for unparsed lines.
-Save always enabled.
-
-FR4 — Home Sorting
-sorted = [today] + [upcoming asc] + [past-this-week desc (red)]
-Past weeks archived until new Plan submitted.
-
-FR5 — Card Completion
-
-Complete CTA → confirm → isCompleted = true → hidden from Home, retained in DB.
-
-FR6 — WOD Detail
-
-Grouped by Segment, source order.
-Row layout adapts to exercise type (standard / timed / interval / superset / block / name-only).
-Pencil icon on each row → inline edit post-save.
-YT logo button on every row.
-
-FR7 — YouTube Interstitial
-
-Full-screen .fullScreenCover.
-WKWebView loads https://www.youtube.com/results?search_query=<url-encoded name>+tutorial.
-URL-encode via .urlQueryAllowed; truncate query to 100 chars.
-Config:
-
-allowsInlineMediaPlayback = true
-mediaTypesRequiringUserActionForPlayback = []
-websiteDataStore = .default()
-
-
-Domain allowlist: youtube.com, youtu.be, google.com, googleusercontent.com, ytimg.com. Block all others.
-"Open in YouTube app" → youtube:// scheme, fallback to https.
-Release webview on dismiss.
-
-FR8 — Overwrite Handling
-
-New Plan with overlapping dates → modal: Overwrite / Merge / Cancel.
-
-Non-Functional Requirements
-| Category          | Target                                                     |
-| ----------------- | ---------------------------------------------------------- |
-| Cold start        | ≤ 1.5s                                                     |
-| Parse time        | ≤ 2s for 5,000 chars                                       |
-| Webview cold load | ≤ 2.5s p90 on 4G                                           |
-| Offline           | Home + Detail work; YT button disabled                     |
-| Storage           | <50MB                                                      |
-| Memory            | Webview released on dismiss                                |
-| Crash-free        | ≥ 99.5%                                                    |
-| Privacy           | No data leaves device except webview's own YouTube traffic |
-
-Edge Cases
-| Case                               | Behavior                                                  |
-| ---------------------------------- | --------------------------------------------------------- |
-| Empty paste                        | Submit disabled                                           |
-| Start > End                        | Inline error                                              |
-| Same-day plan                      | Allowed                                                   |
-| DST change mid-plan                | Use `Calendar` day math, not seconds                      |
-| Duplicate exercise names           | Independent rows                                          |
-| Non-English name                   | URL-encoded, passed to YouTube                            |
-| Emojis/stickers in paste           | Stripped in preprocessor                                  |
-| Reversed sets/reps order           | Parser rule 7 (reversed)                                  |
-| Missing day                        | Rest card                                                 |
-| Week 2 starts mid-range            | Anchor from Week 1 first day                              |
-| Plan complete before endDate       | "Plan complete" state                                     |
-| Offline                            | YT button disabled with strikethrough                     |
-| Webview fails                      | Retry + Close                                             |
-| Long name                          | Truncate query to 100 chars                               |
-| Special chars (`½`, `°`, `+`, `&`) | URL-encoded                                               |
-| Ambiguous name                     | User refines in webview search bar                        |
-| EU consent banner                  | User handles once; cookies persist via `.default()` store |
-| Rapid YT taps                      | Debounce 500ms                                            |
-| Deep-link hijack attempt           | Blocked by allowlist                                      |
-| Timezone change mid-plan           | Recompute on foreground                                   |
-| EMOTM/TABATA block                 | Parsed to `BlockExercise`, shown collapsible              |
-| Superset `+`                       | Split, share `supersetId`, bracket visual                 |
-| Build-to-max                       | Pill display, no sets field required                      |
-| Numbering skips/duplicates         | Ignored, line order used                                  |
-| Two segments same prefix (`B-`)    | Both kept, distinguished by order                         |
-| Parenthetical notes                | Extracted to `notes` field                                |
-
-Risks & Mitigations
-| Risk                                 | Mitigation                                                    |
-| ------------------------------------ | ------------------------------------------------------------- |
-| Parser misses 30–40% of lines        | Fast preview + edit; confidence badges; "Needs Review" bucket |
-| Coach changes format                 | Parser is line-order based, tolerant to numbering changes     |
-| WKWebView memory leaks               | Release on dismiss, nil delegate                              |
-| EU consent flow                      | Cookies persist across sessions                               |
-| DST/timezone bugs                    | Calendar day arithmetic                                       |
-| Deep-link hijack                     | Domain allowlist                                              |
-| User frustration from manual cleanup | Make preview edit fast (inline, swipe, long-press)            |
+Move is a lightweight workout companion that converts a workout program received through messaging applications (primarily WhatsApp) into a clean, structured, and distraction-free workout experience.
 
+The application does **not** replace a coach, generate workouts, or track fitness progress.
+
+Its sole purpose is to eliminate the friction between receiving a workout and performing it.
+
+The application is intentionally offline-first, requires no user account, and stores all information locally on the user's device.
+
+---
+
+# 2. Problem Statement
+
+Many personal trainers send workout plans through WhatsApp as long text messages.
+
+Typical user flow today:
+
+1. Open WhatsApp.
+2. Scroll through a large workout message.
+3. Read the next exercise.
+4. Open YouTube.
+5. Search for the exercise.
+6. Watch a tutorial.
+7. Return to WhatsApp.
+8. Find the next exercise.
+9. Repeat.
+
+This repetitive context switching creates unnecessary friction before and during every workout.
+
+The goal of Move is to remove this friction.
+
+---
+
+# 3. Goals
+
+The application should allow a user to:
+
+- Paste an entire workout message.
+- Convert it into structured workout days.
+- Display workouts in a clean format.
+- Provide one-tap access to exercise tutorials.
+- Allow workouts to be completed and removed.
+- Automatically organize workouts by date.
+- Operate entirely offline after import.
+
+---
+
+# 4. Non Goals
+
+The MVP will NOT include:
+
+- User accounts
+- Cloud sync
+- Apple Health integration
+- Progress tracking
+- Weight logging
+- Rep logging
+- Exercise history
+- Workout timers
+- Notifications
+- AI coaching
+- Workout generation
+- Exercise recommendations
+- Social features
+
+---
+
+# 5. User Persona
+
+## Primary User
+
+Someone working with a personal coach that sends workouts through WhatsApp.
+
+Characteristics:
+
+- Receives new workouts weekly or bi-weekly.
+- Often unfamiliar with exercises.
+- Needs YouTube demonstrations.
+- Wants to start workouts quickly.
+- Does not want to manually organize workouts.
+
+---
+
+# 6. User Journey
+
+Receive WhatsApp workout
+
+↓
+
+Copy message
+
+↓
+
+Open Move
+
+↓
+
+Import Workout
+
+↓
+
+Select workout dates
+
+↓
+
+Paste workout
+
+↓
+
+Submit
+
+↓
+
+Workout parsed locally
+
+↓
+
+Workout appears on Home
+
+↓
+
+Tap today's workout
+
+↓
+
+Follow workout
+
+↓
+
+Watch YouTube tutorials when needed
+
+↓
+
+Complete workout
+
+↓
+
+Workout removed from Home
+
+---
+
+# 7. Navigation
+
+Bottom Navigation
+
+```
+Home
+Import
+```
+
+Only two tabs exist in MVP.
+
+---
+
+# 8. Screen 1 — Home
+
+## Purpose
+
+Display all imported workout days in chronological order.
+
+---
+
+## Layout
+
+Navigation Title
+
+```
+Home
+```
+
+Below title
+
+Scrollable list of Workout Cards.
+
+---
+
+## Empty State
+
+If no workout has been imported:
+
+Display
+
+```
+No workouts yet.
+
+Import your first workout using the Import tab.
+```
+
+---
+
+## Workout Card
+
+Each workout day is represented by one card.
+
+Display:
+
+- Date
+- Day Name
+- Number of workout segments
+- Total number of exercises
+- Segment names
+
+Example
+
+```
+Monday
+
+July 8
+
+Segments
+
+Power
+Strength
+Conditioning
+
+14 Exercises
+```
+
+---
+
+## Card Ordering
+
+Cards should always appear in the following priority.
+
+Priority 1
+
+Current day
+
+Priority 2
+
+Future workout days
+
+Priority 3
+
+Past workout days
+
+Priority 4
+
+Expired workout cycles
+
+---
+
+## Expired Workout Styling
+
+Past workout dates should remain visible.
+
+Requirements
+
+- Display date in red.
+- Reduce card opacity slightly.
+- Do NOT delete automatically.
+
+---
+
+## Completed Workout
+
+Each workout card contains a CTA
+
+```
+Complete Workout
+```
+
+This button is separate from opening the workout.
+
+If tapped:
+
+Display confirmation dialog.
+
+```
+Complete this workout?
+
+Cancel
+
+Complete
+```
+
+If confirmed
+
+Remove workout card from Home.
+
+Workout data is marked completed locally.
+
+---
+
+## Workout Completion Rules
+
+Completing a workout removes only that workout day.
+
+Remaining workout days remain unchanged.
+
+---
+
+## Card Selection
+
+Tapping anywhere except the CTA opens Workout Detail.
+
+---
+
+# 9. Screen 2 — Workout Detail
+
+## Purpose
+
+Display every exercise for the selected workout day.
+
+---
+
+## Header
+
+Display
+
+Back
+
+Workout Date
+
+Day Name
+
+---
+
+## Segment Display
+
+Segments appear in the same order as coach input.
+
+Example
+
+```
+Power
+
+Strength
+
+Core
+```
+
+Do not alphabetically sort.
+
+---
+
+## Exercise Card
+
+Each exercise displays:
+
+Exercise Name
+
+Sets
+
+Reps
+
+Rounds
+
+Duration
+
+Coach Notes
+
+YouTube Tutorial
+
+Only show fields containing values.
+
+Example
+
+```
+DB Push Press
+
+Sets
+3
+
+Reps
+8
+
+Notes
+
+Use straps
+
+Pause 3 seconds
+
+[Watch Tutorial]
+```
+
+---
+
+## YouTube Tutorial
+
+Selecting Watch Tutorial opens an in-app browser.
+
+Search Query
+
+```
+<Exercise Name> Exercise
+```
+
+Example
+
+```
+DB Push Press Exercise
+```
+
+The application should search YouTube.
+
+Do not maintain an exercise database.
+
+---
+
+## Tutorial Browser
+
+Requirements
+
+Open inside application.
+
+User may:
+
+- Browse search results.
+- Watch any video.
+- Close browser.
+
+Returning should preserve workout position.
+
+---
+
+## Exercise Order
+
+Display exactly as coach provided.
+
+Never reorder.
+
+---
+
+## Rest Day
+
+If workout is a rest day
+
+Display
+
+```
+Rest Day
+
+Enjoy your recovery.
+```
+
+Do not show empty exercise cards.
+
+---
+
+# 10. Screen 3 — Import
+
+## Purpose
+
+Import a new workout cycle.
+
+---
+
+## Fields
+
+### Start Date
+
+Native iOS date picker.
+
+Required.
+
+---
+
+### End Date
+
+Native iOS date picker.
+
+Required.
+
+---
+
+Validation
+
+End Date
+
+must be
+
+greater than or equal to
+
+Start Date.
+
+---
+
+### Workout Text
+
+Large multiline text field.
+
+Supports
+
+Paste
+
+Typing
+
+Selection
+
+Undo
+
+---
+
+Placeholder
+
+```
+Paste workout here...
+```
+
+---
+
+## Submit Button
+
+Disabled until
+
+- Start Date selected
+- End Date selected
+- Workout text not empty
+
+---
+
+## Submit
+
+When pressed
+
+Application should
+
+Validate
+
+↓
+
+Parse
+
+↓
+
+Save locally
+
+↓
+
+Return user to Home
+
+---
+
+# 11. Parsing Engine
+
+## Objective
+
+Convert coach text into structured workout objects.
+
+No AI required.
+
+Parser should use deterministic rules.
+
+---
+
+## Supported Structure
+
+```
+Week
+
+↓
+
+Day
+
+↓
+
+Segment
+
+↓
+
+Exercises
+```
+
+---
+
+## Week Detection
+
+Recognize
+
+```
+Week-1
+
+Week 1
+
+Week-13
+
+Week-20
+```
+
+---
+
+## Day Detection
+
+Recognize
+
+Monday
+
+Tuesday
+
+Wednesday
+
+Thursday
+
+Friday
+
+Saturday
+
+Sunday
+
+---
+
+## Segment Detection
+
+Detect
+
+```
+A-
+
+B-
+
+C-
+
+D-
+```
+
+Everything following becomes segment title.
+
+Examples
+
+```
+A- Strength
+
+B- Power
+
+C- Core
+```
+
+---
+
+## Exercise Detection
+
+Exercise numbering should NOT be trusted.
+
+Parser should detect exercise lines even if numbering is inconsistent.
+
+Examples
+
+```
+1-
+
+2-
+
+3-
+
+3-
+
+5-
+
+No numbering
+```
+
+All supported.
+
+---
+
+## Preserve Coach Text
+
+Do not modify
+
+- Exercise names
+- Notes
+- Tempo
+- Coaching instructions
+
+Store exactly as received.
+
+---
+
+## Structured Values
+
+Extract where possible
+
+- Sets
+- Reps
+- Duration
+- Rounds
+
+Everything else becomes
+
+Coach Notes.
+
+---
+
+## Unknown Formats
+
+If parser cannot classify text
+
+Store inside
+
+Coach Notes.
+
+Never discard information.
+
+---
+
+## Rest Day Detection
+
+Recognize
+
+```
+Rest
+
+Rest Day
+
+Recovery
+
+Recovery Day
+```
+
+Create Rest Day workout.
+
+---
+
+## Parsing Failure
+
+If workout cannot be parsed
+
+Display
+
+```
+Unable to understand workout.
+
+Please verify formatting.
+```
+
+Do not save partial data.
+
+---
+
+# 12. Local Storage
+
+Application stores
+
+Workout Cycle
+
+↓
+
+Workout Day
+
+↓
+
+Segment
+
+↓
+
+Exercise
+
+All data remains on device.
+
+No backend.
+
+---
+
+# 13. Data Model
+
+## Workout Cycle
+
+- ID
+- Start Date
+- End Date
+- Week Number
+- Date Imported
+
+---
+
+## Workout Day
+
+- ID
+- Date
+- Day Name
+- Completed
+- Is Rest Day
+
+---
+
+## Segment
+
+- ID
+- Name
+- Display Order
+
+---
+
+## Exercise
+
+- ID
+- Name
+- Sets
+- Reps
+- Duration
+- Rounds
+- Coach Notes
+- Display Order
+
+---
+
+# 14. Business Rules
+
+## Dates
+
+Workout dates are generated from
+
+Start Date
+
++
+
+Workout order.
+
+---
+
+Example
+
+Workout starts Monday.
+
+Monday
+
+↓
+
+Tuesday
+
+↓
+
+Wednesday
+
+mapped automatically.
+
+---
+
+If workout starts on Wednesday
+
+Wednesday becomes first workout day.
+
+---
+
+## Import Replacement
+
+Importing a new workout replaces the current active workout cycle.
+
+Previous completed workouts remain stored locally for future enhancement but are hidden from Home.
+
+---
+
+## Multiple Imports
+
+Only one active workout cycle exists.
+
+---
+
+# 15. Validation
+
+Reject submission if
+
+- Empty workout
+- Invalid dates
+- End before start
+
+---
+
+Accept
+
+Large workout text.
+
+---
+
+# 16. Edge Cases
+
+## Duplicate Import
+
+Same workout pasted twice.
+
+Replace current workout after confirmation.
+
+---
+
+## Missing Segment
+
+Exercises before first segment
+
+Create
+
+```
+General
+```
+
+segment.
+
+---
+
+## Missing Sets
+
+Display only exercise name.
+
+---
+
+## Missing Reps
+
+Do not display rep field.
+
+---
+
+## Missing Notes
+
+Hide notes section.
+
+---
+
+## Unknown Exercise
+
+Still create exercise.
+
+Tutorial uses exercise name.
+
+---
+
+## Empty Day
+
+Create Rest Day.
+
+---
+
+## Weekend Rest
+
+Support
+
+```
+Saturday and Sunday
+Rest Day
+```
+
+---
+
+## Extra Spaces
+
+Ignore.
+
+---
+
+## Blank Lines
+
+Ignore.
+
+---
+
+## Mixed Uppercase
+
+Support.
+
+---
+
+## Typographical Errors
+
+Parser should tolerate minor formatting inconsistencies where possible without altering coach content.
+
+---
+
+# 17. Performance
+
+Workout import
+
+Target
+
+<1 second
+
+Normal workout
+
+300 exercises maximum.
+
+---
+
+Scrolling
+
+Smooth 60 FPS.
+
+---
+
+App launch
+
+Under 2 seconds.
+
+---
+
+# 18. Accessibility
+
+Support
+
+Dynamic Type
+
+VoiceOver
+
+Large Touch Targets
+
+High Contrast
+
+---
+
+# 19. Analytics (Local Only)
+
+Track locally
+
+Workout Imported
+
+Workout Opened
+
+Tutorial Opened
+
+Workout Completed
+
+Import Failed
+
+Parser Failed
+
+No external analytics in MVP.
+
+---
+
+# 20. Acceptance Criteria
+
+### Home
+
+- Displays imported workouts.
+- Orders correctly.
+- Shows segment names.
+- Opens workout details.
+- Supports completion.
+
+---
+
+### Import
+
+- Dates required.
+- Text required.
+- Submit disabled until valid.
+- Successfully parses supported formats.
+
+---
+
+### Workout Detail
+
+- Displays all segments.
+- Displays all exercises.
+- Preserves order.
+- Opens YouTube search.
+- Supports rest days.
+
+---
+
+### Parser
+
+Supports
+
+- Week detection
+- Day detection
+- Segment detection
+- Exercise extraction
+- Sets
+- Reps
+- Duration
+- Coach notes
+- Rest days
+- Imperfect numbering
+- Unknown text preservation
+
+No workout information should be silently discarded.
+
+---
+
+# 21. Future Enhancements (Out of Scope)
+
+- Exercise thumbnails
+- Offline exercise videos
+- Apple Health integration
+- Workout history
+- Weight logging
+- Timer
+- Rest timer
+- Progress tracking
+- Coach sharing
+- PDF import
+- OCR from screenshots
+- AI-assisted parsing for unsupported formats
+- Exercise favorites
+- Calendar view
+- Push notifications
+- Search
+- Multiple workout cycles
+- Exercise substitutions
+
+---
+
+# 22. MVP Definition
+
+The MVP is successful when a user can:
+
+1. Receive a workout in WhatsApp.
+2. Copy the message.
+3. Paste it into Move.
+4. Import the workout successfully.
+5. Open today's workout.
+6. View every exercise in order.
+7. Watch YouTube tutorials without leaving the app.
+8. Complete the workout.
+9. Continue using the application with no internet dependency except YouTube search.
+
+If these tasks are completed with minimal friction, the MVP has achieved its objective.
+
+
+
+Updated Storage Strategy
+Storage
+
+GymJam is a fully offline application.
+
+All workout data is stored locally on the user's device.
+
+No workout information is transmitted to external servers.
+
+No user account is required.
+
+No cloud synchronization is performed.
+
+The application should persist all workout data across application launches and device restarts.
+
+Active Workout Rules
+
+Only one Active Workout Cycle may exist at any given time.
+
+Importing a new workout:
+
+Archives the previous Active Workout Cycle.
+Creates a new Active Workout Cycle.
+Displays only the new cycle on the Home screen.
+
+The user never has to manually archive workouts.
+
+Workout History
+Navigation
+
+Bottom Navigation
+Home
+History
+Import
+Purpose
+
+The History screen allows users to revisit previously imported workout cycles.
+
+Historical workouts are read-only.
+
+Users cannot accidentally modify archived workouts.
+History
+History Information Architecture:
+
+└── 2026
+
+    ├── July
+
+    │   ├── Week 14
+    │   │
+    │   │── Monday
+    │   │── Tuesday
+    │   │── Wednesday
+    │   │── Thursday
+    │   │── Friday
+    │
+    │   ├── Week 13
+    │   │
+    │   │── Monday
+    │   │── Tuesday
+    │   │── Wednesday
+    │
+    ├── June
+        ├── Week 12
+
+
+
+Hierarchy
+Month
+
+↓
+
+Week
+
+↓
+
+Workout Day
+
+
+Newest month appears first.
+
+Newest week appears first.
+
+Days remain in chronological order.
+
+
+
+History Card
+
+Each archived week displays:
+
+Week Number
+Date Range
+Number of Workout Days
+Completion Percentage
+
+Example
+Week 14
+
+Jul 7 – Jul 13
+
+5 Workout Days
+
+100% Completed
+
+Daily Workout Card (History)
+
+Displays
+Monday
+
+Segments
+
+Strength
+
+Conditioning
+
+14 Exercises
+
+Completed ✓
+
+
+
+History Restrictions
+
+Users may
+
+Browse
+Read
+Watch YouTube tutorials
+
+Users may not
+
+Edit
+Delete
+Reorder
+Mark complete
+Change workout dates
+
+
+
+Data Lifecycle
+Import Workout
+
+↓
+
+Active Workout Cycle
+
+↓
+
+User completes workouts
+
+↓
+
+Imports New Workout
+
+↓
+
+Previous Cycle Archived
+
+↓
+
+Visible under History
+
+
+
+
+Storage Limits
+
+There is no hard storage limit enforced by the application.
+
+Because workout plans are plain text with lightweight metadata, even hundreds of archived workout cycles consume very little storage (typically only a few megabytes).
+
+To maintain transparency, GymJam should estimate the total local storage used by workout data.
+
+If stored workout data exceeds 1 GB, the application should display a non-blocking informational banner:
+
+Workout history is using over 1 GB of local storage. Consider deleting older workout history if you no longer need it.
+
+The banner should:
+
+Appear only once per app launch until dismissed.
+Never block importing new workouts.
+Include a Manage Storage action that navigates to History for future cleanup functionality.
+
+Note: Reaching 1 GB with text-only workout data is extremely unlikely. This requirement mainly becomes relevant if future versions add cached videos, images, or attachments. For the MVP, it's best to implement the storage usage calculation but expect the warning to almost never appear.
 
 
 
