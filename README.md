@@ -142,7 +142,10 @@ time via `orderedDays` / `orderedSegments` / `orderedExercises`.
 | Multi-day    | `Saturday and Sunday` → two days; `Rest`/`Recovery` marks rest    |
 | Segment      | `A- Strength`, `B - Power` (single leading letter + separator)    |
 | Exercise     | `1- Squat`, `2. Bench`, or any un-numbered non-header line         |
-| Sets × Reps  | `3x8`, `4 x 5`                                                     |
+| Sets × Reps  | `3x8`, `4 x 5` (an `x` between numbers ⇒ sets × reps)              |
+| Reps × Sets  | `8 reps *4sets`, `12es*3sets`, `10*4sets` (a `*` before an explicit `sets` ⇒ reps × sets) |
+| Each-side    | `12es`, `15 es` → reps (each side)                                 |
+| Superset     | `A 8 reps + B 15 reps *3sets` → **two** exercises; a set count stated once is shared (a `+` inside `( … )` is never split) |
 | Sets / Reps  | `3 sets`, `8 reps`, `8-12 reps`                                    |
 | Rounds       | `3 rounds`, `3 rds`                                                |
 | Duration     | `30s`, `45 sec`, `2 min`, `3:00`                                   |
@@ -154,6 +157,25 @@ time via `orderedDays` / `orderedSegments` / `orderedExercises`.
 is preserved as coach notes.
 
 ---
+
+## Validation against real coach messages
+
+The parser was validated against four real, messy coach messages (Weeks 1, 2, 13, 14). Results:
+
+- **Weeks, days, segments, rest days, and both metric conventions parse correctly.** Mon/Wed/Fri
+  weeks yield exactly three days; `Saturday And Sunday` + `Rest day` yields two rest days;
+  multi-word recovery lines (`Rest/ recovery/ walk/ Sauna/ Mobility/`) are detected as rest;
+  duplicate/empty section headers are dropped.
+- **Everything is preserved** — no coach information is discarded.
+
+Two graceful-degradation cases (structure imperfect, information intact — acceptable per PRD §16):
+
+- **Instructional / directive lines** that stand alone (e.g. `RIR-2`, `2-3 Mins break between the set`,
+  multi-sentence "build to a 3RM…" notes on their own line) are captured as their own exercise
+  entries rather than folded into the preceding exercise's notes. They still display; the count is
+  just slightly inflated.
+- **Bare section titles without a letter prefix** (e.g. a lone `Strength` line, versus `A- Strength`)
+  are not recognized as a new segment, so following exercises attach to the previous segment.
 
 ## Known limitations (prototype scope)
 

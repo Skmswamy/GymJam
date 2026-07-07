@@ -12,7 +12,9 @@
 //                      days joined by "and"/"&"/"/"; "Rest"/"Recovery" marks rest
 //   • Segment header:  "A- Strength", "B - Power"    (single leading letter)
 //   • Exercise line:   "1- DB Press 3x8", or any non-header line
-//   • Metrics parsed inline: 3x8, "3 sets", "8 reps", "30s", "3 rounds"
+//   • Superset line:   "A 8 reps + B 15 reps *3sets" → two exercises (shared sets)
+//   • Metrics parsed inline: 3x8 (sets×reps), "8 reps *4sets" (reps×sets),
+//                            "12es" (each-side reps), "3 sets", "30s", "3 rounds"
 //   • Keyword lines (Sets/Reps/Rounds/Duration/Notes) attach to current exercise
 //   • Anything unclassified is preserved as coach notes — never discarded.
 //
@@ -141,12 +143,18 @@ enum WorkoutParser {
                 continue
             }
 
-            // 7) Otherwise: a new exercise line
-            let exercise = makeExercise(from: line)
+            // 7) Otherwise: a new exercise line (may expand to a superset).
+            let exercises = makeExercises(from: line)
             ensureSegment(in: &workout, dayIndex: dayIndex)
             let segIndex = workout.days[dayIndex].segments.count - 1
-            workout.days[dayIndex].segments[segIndex].exercises.append(exercise)
+            workout.days[dayIndex].segments[segIndex].exercises.append(contentsOf: exercises)
             notesMode = false
+        }
+
+        // Drop empty segments left behind by duplicate/blank section headers
+        // (e.g. a "B- Strength" line immediately followed by "B- Hypertrophy").
+        for i in workout.days.indices {
+            workout.days[i].segments.removeAll { $0.exercises.isEmpty }
         }
 
         // Empty days become rest days (PRD edge case).
@@ -235,7 +243,15 @@ enum WorkoutParser {
 
     private static func isBareRest(_ line: String) -> Bool {
         let lower = line.lowercased().trimmingCharacters(in: .whitespaces)
-        return restKeywords.contains(lower)
+        if restKeywords.contains(lower) { return true }
+        // Multi-word recovery lines, e.g. "Rest/ recovery/ walk/ Sauna/ Mobility/".
+        // A rest marker starts with rest/recovery and contains no numbers
+        // (so a real exercise like "Rest-pause bench 8 reps" is not swallowed).
+        let hasDigit = lower.rangeOfCharacter(from: .decimalDigits) != nil
+        if !hasDigit, lower.hasPrefix("rest") || lower.hasPrefix("recovery") {
+            return true
+        }
+        return false
     }
 
     /// "A- Strength" / "B - Power". Single leading letter distinguishes a
@@ -328,26 +344,81 @@ enum WorkoutParser {
 
     // MARK: - Exercise extraction
 
-    private static func makeExercise(from line: String) -> ParsedExercise {
-        // Strip a leading numeric bullet: "1- ", "2. ", "3) ".
+    /// A single coach line may contain a **superset** — two or more exercises
+    /// joined by "+", e.g. "Box Jump 8 reps + reverse hyper 15 reps *3sets".
+    /// This strips the bullet, splits into parts, parses each, and propagates a
+    /// shared trailing set/round count across the whole superset.
+    private static func makeExercises(from line: String) -> [ParsedExercise] {
         var body = line
         if let stripped = firstMatch(#"^[0-9]{1,3}\s*[-.)]\s*(.+)$"#, in: line) {
             body = stripped
         }
 
+        let parts = splitSupersets(body)
+        guard parts.count > 1 else { return [parseSingleExercise(from: body)] }
+
+        var exercises = parts.map { parseSingleExercise(from: $0) }
+        // A count stated once (usually on the last part) applies to the set.
+        if let sharedSets = exercises.last(where: { $0.sets != nil })?.sets {
+            for i in exercises.indices where exercises[i].sets == nil { exercises[i].sets = sharedSets }
+        }
+        if let sharedRounds = exercises.last(where: { $0.rounds != nil })?.rounds {
+            for i in exercises.indices where exercises[i].rounds == nil { exercises[i].rounds = sharedRounds }
+        }
+        return exercises
+    }
+
+    /// Splits on " + " at paren depth 0 so notes like "(one Clock wise + …)" or
+    /// "front and back" are never broken apart.
+    private static func splitSupersets(_ body: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        var depth = 0
+        let chars = Array(body)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if c == "(" { depth += 1 }
+            else if c == ")" { depth = max(0, depth - 1) }
+
+            let prevIsSpace = i > 0 && chars[i - 1] == " "
+            let nextIsSpace = i < chars.count - 1 && chars[i + 1] == " "
+            if depth == 0, c == "+", prevIsSpace, nextIsSpace {
+                parts.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+                i += 1
+                continue
+            }
+            current.append(c)
+            i += 1
+        }
+        let tail = current.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty { parts.append(tail) }
+        let cleaned = parts.filter { !$0.isEmpty }
+        return cleaned.isEmpty ? [body] : cleaned
+    }
+
+    private static func parseSingleExercise(from body: String) -> ParsedExercise {
         var reps: String?
         var sets: String?
         var rounds: String?
         var duration: String?
 
-        // Combined "3x8" / "3 x 8" → sets x reps.
-        if let m = firstMatchGroups(#"(\d+)\s*[xX×*]\s*(\d+)"#, in: body), m.count == 2 {
+        // Coaches use two conventions:
+        //  • "reps * sets": "8 reps *4sets", "12es*3sets", "10*4sets"
+        //    (a "*"/"×" followed by an explicit "sets" ⇒ first number is reps)
+        //  • "sets x reps": "3x8" (standard gym shorthand ⇒ first number is sets)
+        let lower = body.lowercased()
+        if let m = firstMatchGroups(#"(\d+)\s*(?:es|reps?)?\s*[*×]\s*(\d+)\s*sets?\b"#, in: lower), m.count == 2 {
+            reps = m[0]; sets = m[1]
+        } else if let m = firstMatchGroups(#"(\d+)\s*[xX]\s*(\d+)"#, in: body), m.count == 2 {
             sets = m[0]; reps = m[1]
         }
-        if sets == nil, let v = firstMatchGroups(#"(\d+)\s*sets?\b"#, in: body.lowercased())?.first {
+        if sets == nil, let v = firstMatchGroups(#"(\d+)\s*sets?\b"#, in: lower)?.first {
             sets = v
         }
-        if reps == nil, let v = firstMatchGroups(#"(\d+(?:\s*[-–/]\s*\d+)?)\s*reps?\b"#, in: body.lowercased())?.first {
+        // Reps via keyword ("8 reps") or each-side shorthand ("12es", "15 es").
+        if reps == nil, let v = firstMatchGroups(#"(\d+(?:\s*[-–/]\s*\d+)?)\s*(?:reps?|es)\b"#, in: lower)?.first {
             reps = v.replacingOccurrences(of: " ", with: "")
         }
         if let v = firstMatchGroups(#"(\d+)\s*(?:rounds?|rds?)\b"#, in: body.lowercased())?.first {

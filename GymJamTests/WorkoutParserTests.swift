@@ -117,6 +117,95 @@ struct WorkoutParserTests {
         #expect(w.days[1].isRestDay)
     }
 
+    // MARK: Real-world coach formats (validated against live samples)
+
+    @Test func parsesRepsFirstConvention() throws {
+        // Coach writes reps * sets, e.g. "8 reps *4sets".
+        let w = try WorkoutParser.parse("Monday\nB- Accessory\n2- Pendulum Squat 8 reps *4sets")
+        let ex = try #require(w.days[0].segments[0].exercises.first)
+        #expect(ex.reps == "8")
+        #expect(ex.sets == "4")
+    }
+
+    @Test func parsesEachSideShorthand() throws {
+        // "12es*3sets" => 12 reps (each side), 3 sets.
+        let w = try WorkoutParser.parse("Monday\nB- Accessory\n1- Db walking lunges 12 es*3sets")
+        let ex = try #require(w.days[0].segments[0].exercises.first)
+        #expect(ex.reps == "12")
+        #expect(ex.sets == "3")
+        #expect(ex.name == "Db walking lunges")
+    }
+
+    @Test func setsFirstShorthandStillWorks() throws {
+        // Standard "3x8" remains sets x reps.
+        let w = try WorkoutParser.parse("Monday\nA- Strength\n1- Bench 3x8")
+        let ex = try #require(w.days[0].segments[0].exercises.first)
+        #expect(ex.sets == "3")
+        #expect(ex.reps == "8")
+    }
+
+    @Test func multiWordRecoveryLineIsRest() throws {
+        let w = try WorkoutParser.parse("Thursday\nRest/ recovery/ walk/ Sauna/ Mobility/")
+        #expect(w.days[0].isRestDay)
+        #expect(w.days[0].segments.isEmpty)
+    }
+
+    @Test func multiDayRestOnOneHeader() throws {
+        let w = try WorkoutParser.parse("Saturday And Sunday\nRest day")
+        #expect(w.days.count == 2)
+        #expect(w.days.allSatisfy { $0.isRestDay })
+    }
+
+    @Test func dropsEmptyDuplicateSegmentHeaders() throws {
+        // "B- Strength" immediately followed by "B- hypertrophy" — the empty one is dropped.
+        let w = try WorkoutParser.parse("Wednesday\nB- Strength\nB- hypertrophy\n1- Press 8 reps *3sets")
+        #expect(w.days[0].segments.count == 1)
+        #expect(w.days[0].segments[0].name == "hypertrophy")
+    }
+
+    @Test func onlyPresentWeekdaysBecomeDays() throws {
+        // A Mon/Wed/Fri week yields exactly three days.
+        let text = "Week-14\nMonday\n1- Squat 3x8\nWednesday\n1- Press 3x8\nFriday\n1- Pull 3x8"
+        let w = try WorkoutParser.parse(text)
+        #expect(w.days.count == 3)
+        #expect(w.days.map { $0.dayName } == ["Monday", "Wednesday", "Friday"])
+    }
+
+    // MARK: Supersets (combined exercises joined by "+")
+
+    @Test func splitsSupersetIntoTwoExercises() throws {
+        let w = try WorkoutParser.parse(
+            "Friday\nA- Strength\n8- Cyclist Squat to failure reps  + Bear crawl front and back 15reps  *2sets"
+        )
+        let exs = w.days[0].segments[0].exercises
+        #expect(exs.count == 2)
+        #expect(exs[0].name.hasPrefix("Cyclist Squat"))
+        #expect(exs[1].name.hasPrefix("Bear crawl"))
+        // Shared trailing set count applies to both.
+        #expect(exs[0].sets == "2")
+        #expect(exs[1].sets == "2")
+        #expect(exs[1].reps == "15")
+    }
+
+    @Test func supersetPropagatesSetsAndKeepsPerPartReps() throws {
+        let w = try WorkoutParser.parse(
+            "Monday\nA- Power\n1- Box Jump 8 reps + reverse hyper 15 reps *3sets"
+        )
+        let exs = w.days[0].segments[0].exercises
+        #expect(exs.count == 2)
+        #expect(exs[0].reps == "8")
+        #expect(exs[1].reps == "15")
+        #expect(exs[0].sets == "3")
+        #expect(exs[1].sets == "3")
+    }
+
+    @Test func doesNotSplitPlusInsideParentheses() throws {
+        let w = try WorkoutParser.parse(
+            "Monday\nA- Trunk\n45 secs Swiss ball (one clock wise + one anti clock wise)"
+        )
+        #expect(w.days[0].segments[0].exercises.count == 1)
+    }
+
     // MARK: Date mapping
 
     @Test func firstDayMapsToStartDate() {
