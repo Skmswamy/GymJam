@@ -1,5 +1,5 @@
 # Product Requirements Document (PRD)
-# Move – Workout Import & Guided Workout Experience (MVP)
+# GymJam – Workout Import & Guided Workout Experience (MVP)
 
 **Version:** 1.0  
 **Status:** Draft  
@@ -14,7 +14,7 @@
 
 ## Product Vision
 
-Move is a lightweight workout companion that converts a workout program received through messaging applications (primarily WhatsApp) into a clean, structured, and distraction-free workout experience.
+GymJam is a lightweight workout companion that converts a workout program received through messaging applications (primarily WhatsApp) into a clean, structured, and distraction-free workout experience.
 
 The application does **not** replace a coach, generate workouts, or track fitness progress.
 
@@ -42,7 +42,7 @@ Typical user flow today:
 
 This repetitive context switching creates unnecessary friction before and during every workout.
 
-The goal of Move is to remove this friction.
+The goal of GymJam is to remove this friction.
 
 ---
 
@@ -106,7 +106,7 @@ Copy message
 
 ↓
 
-Open Move
+Open GymJam
 
 ↓
 
@@ -1109,7 +1109,7 @@ The MVP is successful when a user can:
 
 1. Receive a workout in WhatsApp.
 2. Copy the message.
-3. Paste it into Move.
+3. Paste it into GymJam.
 4. Import the workout successfully.
 5. Open today's workout.
 6. View every exercise in order.
